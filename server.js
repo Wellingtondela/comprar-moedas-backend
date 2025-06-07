@@ -1,8 +1,9 @@
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
-const admin = require('./firebaseConfig');
+const { admin, db } = require('./firebaseConfig');
 require('dotenv').config();
+
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -68,6 +69,7 @@ app.post('/criar-pagamento', async (req, res) => {
 });
 
 // ✅ WEBHOOK para confirmar compra de moedas
+// ✅ WEBHOOK para confirmar compra de moedas
 app.post('/webhook', async (req, res) => {
   const data = req.body;
 
@@ -76,29 +78,40 @@ app.post('/webhook', async (req, res) => {
       const paymentId = data.data.id;
 
       const response = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
-        headers: { Authorization: `Bearer ${mpAccessToken}` }
+        headers: {
+          Authorization: `Bearer ${mpAccessToken}`
+        }
       });
 
       const payment = await response.json();
 
       if (payment.status === 'approved') {
-        let info = {};
+        const { external_reference, transaction_amount } = payment;
+
+        let info = { uid: '', moedas: 0, preco: 0 };
         try {
-          info = JSON.parse(payment.external_reference);
+          info = JSON.parse(external_reference);
         } catch (e) {
-          console.warn('⚠️ Erro ao interpretar external_reference:', e);
+          console.warn('⚠️ Erro ao converter external_reference:', e);
         }
 
-        await admin.db.collection('compras_moedas').add({
-          uid: info.uid,
-          moedas: info.moedas,
-          preco: info.preco,
-          status: payment.status,
-          payment_id: payment.id,
-          data_pagamento: new Date()
-        });
+        // Recupera o documento do usuário
+        const userRef = db.collection('usuarios').doc(info.uid);
+        const userDoc = await userRef.get();
 
-        console.log(`✅ Compra confirmada - ${info.moedas} moedas para ${info.uid}`);
+        let moedasAtuais = 0;
+
+        if (userDoc.exists) {
+          const dados = userDoc.data();
+          moedasAtuais = dados.moedas || 0;
+        }
+
+        const novasMoedas = moedasAtuais + parseInt(info.moedas);
+
+        // Atualiza a quantidade de moedas
+        await userRef.set({ moedas: novasMoedas }, { merge: true });
+
+        console.log(`✅ ${info.moedas} moedas adicionadas para o usuário ${info.uid}. Total: ${novasMoedas}`);
       }
     }
 
@@ -108,6 +121,7 @@ app.post('/webhook', async (req, res) => {
     res.sendStatus(500);
   }
 });
+
 // ✅ ROTA: Verificar status do pagamento
 app.get('/status-pagamento/:id', async (req, res) => {
   const paymentId = req.params.id;
