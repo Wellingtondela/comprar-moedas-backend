@@ -1,6 +1,7 @@
 {
   "name": "comprar-moedas-backend",
   "version": "1.0.0",
+  "license": "MIT",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

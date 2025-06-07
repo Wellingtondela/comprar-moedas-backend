@@ -2,34 +2,27 @@ const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const admin = require('./firebaseConfig');
-const { MercadoPagoConfig } = require('mercadopago');
+require('dotenv').config();
 
 const app = express();
 const port = process.env.PORT || 3000;
 
 const fetch = global.fetch;
-
-const mpAccessToken = process.env.MP_ACCESS_TOKEN || 'APP_USR-8788773395916849-053008-25d39705629784593abde20b15d8fb2f-568286023';
-
-// Inicializa o Mercado Pago
-const client = new MercadoPagoConfig({ accessToken: mpAccessToken });
+const mpAccessToken = process.env.MP_ACCESS_TOKEN;
 
 app.use(cors());
 app.use(bodyParser.json());
 
-
-// Rota raiz para teste básico
 app.get('/', (req, res) => {
-  res.send('Backend está rodando! Use /jogos-hoje para ver os jogos do dia.');
+  res.send('✅ Backend está rodando - Compra de Moedas via Pix');
 });
 
-
-// ✅ Criar pagamento PIX
+// ✅ ROTA: Criar pagamento Pix para compra de moedas
 app.post('/criar-pagamento', async (req, res) => {
-  const { aposta, telefone, valor } = req.body;
+  const { uid, moedas, preco } = req.body;
 
-  if (!aposta || !telefone || !valor) {
-    return res.status(400).json({ erro: 'Aposta, telefone e valor são obrigatórios.' });
+  if (!uid || !moedas || !preco) {
+    return res.status(400).json({ erro: 'uid, moedas e preco são obrigatórios.' });
   }
 
   try {
@@ -43,38 +36,38 @@ app.post('/criar-pagamento', async (req, res) => {
         'X-Idempotency-Key': idempotencyKey
       },
       body: JSON.stringify({
-        transaction_amount: parseFloat(valor),
-        description: `Aposta: ${aposta}`,
+        transaction_amount: parseFloat(preco),
+        description: `Compra de ${moedas} moedas`,
         payment_method_id: 'pix',
         payer: {
-          email: `${telefone.replace(/\D/g, '')}@apostas.com`,
-          first_name: 'Apostador',
-          last_name: telefone
+          email: `${uid}@moedas.com`,
+          first_name: 'Usuário',
+          last_name: uid
         },
-        external_reference: JSON.stringify({ aposta, telefone })
+        external_reference: JSON.stringify({ uid, moedas, preco })
       })
     });
 
     const data = await response.json();
 
     if (!data.point_of_interaction) {
-      console.error('❌ Erro no retorno do Mercado Pago:', data);
-      throw new Error('Erro ao obter informações de pagamento.');
+      console.error('❌ Erro no pagamento:', data);
+      return res.status(500).json({ erro: 'Erro ao gerar pagamento Pix.' });
     }
 
     res.json({
       qr_code_base64: data.point_of_interaction.transaction_data.qr_code_base64,
-      qr_code: data.point_of_interaction.transaction_data.qr_code,
+      copia_cola: data.point_of_interaction.transaction_data.qr_code,
       payment_id: data.id
     });
 
   } catch (error) {
-    console.error('❌ Erro ao gerar pagamento PIX:', error);
-    res.status(500).json({ erro: 'Erro ao gerar pagamento PIX.', detalhes: error.message });
+    console.error('❌ Erro ao criar pagamento:', error);
+    res.status(500).json({ erro: 'Erro interno ao criar pagamento.' });
   }
 });
 
-// ✅ Webhook Mercado Pago
+// ✅ WEBHOOK para confirmar compra de moedas
 app.post('/webhook', async (req, res) => {
   const data = req.body;
 
@@ -83,33 +76,29 @@ app.post('/webhook', async (req, res) => {
       const paymentId = data.data.id;
 
       const response = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
-        headers: {
-          Authorization: `Bearer ${mpAccessToken}`
-        }
+        headers: { Authorization: `Bearer ${mpAccessToken}` }
       });
 
       const payment = await response.json();
 
       if (payment.status === 'approved') {
-        const { external_reference, transaction_amount } = payment;
-
-        let info = { aposta: '', telefone: '' };
+        let info = {};
         try {
-          info = JSON.parse(external_reference);
+          info = JSON.parse(payment.external_reference);
         } catch (e) {
-          console.warn('⚠️ Erro ao converter external_reference:', e);
+          console.warn('⚠️ Erro ao interpretar external_reference:', e);
         }
 
-        await admin.firestore().collection('apostas').add({
-          aposta: info.aposta,
-          telefone: info.telefone,
-          valor: transaction_amount,
+        await admin.db.collection('compras_moedas').add({
+          uid: info.uid,
+          moedas: info.moedas,
+          preco: info.preco,
           status: payment.status,
           payment_id: payment.id,
           data_pagamento: new Date()
         });
 
-        console.log(`✅ Pagamento aprovado e salvo no Firestore para: ${info.telefone}`);
+        console.log(`✅ Compra confirmada - ${info.moedas} moedas para ${info.uid}`);
       }
     }
 
@@ -120,38 +109,6 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// ✅ Consultar status de pagamento
-app.get('/status-pagamento/:paymentId', async (req, res) => {
-  const { paymentId } = req.params;
-  try {
-    const apostasRef = admin.firestore().collection('apostas');
-
-    // CONVERSÃO para número
-    const snapshot = await apostasRef
-      .where('payment_id', '==', Number(paymentId))
-      .get();
-
-    if (snapshot.empty) {
-      return res.json({ status: 'pending' });
-    }
-
-    let status = 'pending';
-    snapshot.forEach(doc => {
-      const data = doc.data();
-      if (data.status === 'approved') {
-        status = 'approved';
-      }
-    });
-
-    return res.json({ status });
-
-  } catch (error) {
-    console.error('Erro ao consultar status:', error);
-    res.status(500).json({ error: 'Erro interno' });
-  }
-});
-
-// ✅ Inicia o servidor
 app.listen(port, () => {
   console.log(`✅ Servidor rodando na porta ${port}`);
 });
