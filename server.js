@@ -3,8 +3,6 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const admin = require('./firebaseConfig');
 const { MercadoPagoConfig } = require('mercadopago');
-const moment = require('moment-timezone');
-
 
 const app = express();
 const port = process.env.PORT || 3000;
