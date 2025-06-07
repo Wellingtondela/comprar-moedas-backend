@@ -8,7 +8,7 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 const fetch = global.fetch;
-const mpAccessToken = process.env.MP_ACCESS_TOKEN;
+const mpAccessToken = process.env.MERCADO_PAGO_ACCESS_TOKEN;
 
 app.use(cors());
 app.use(bodyParser.json());
