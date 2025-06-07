@@ -70,6 +70,7 @@ app.post('/criar-pagamento', async (req, res) => {
 
 // ✅ WEBHOOK para confirmar compra de moedas
 // ✅ WEBHOOK para confirmar compra de moedas
+// ✅ WEBHOOK para confirmar compra de moedas
 app.post('/webhook', async (req, res) => {
   const data = req.body;
 
@@ -95,7 +96,6 @@ app.post('/webhook', async (req, res) => {
           console.warn('⚠️ Erro ao converter external_reference:', e);
         }
 
-        // Recupera o documento do usuário
         const userRef = db.collection('usuarios').doc(info.uid);
         const userDoc = await userRef.get();
 
@@ -111,7 +111,17 @@ app.post('/webhook', async (req, res) => {
         // Atualiza a quantidade de moedas
         await userRef.set({ moedas: novasMoedas }, { merge: true });
 
-        console.log(`✅ ${info.moedas} moedas adicionadas para o usuário ${info.uid}. Total: ${novasMoedas}`);
+        // Salva histórico da transação
+        await userRef.collection('transacoes').add({
+          moedas: parseInt(info.moedas),
+          preco: parseFloat(info.preco),
+          valor_pago: transaction_amount,
+          payment_id: payment.id,
+          status: payment.status,
+          data: new Date()
+        });
+
+        console.log(`✅ ${info.moedas} moedas adicionadas para o usuário ${info.uid}. Histórico salvo.`);
       }
     }
 
@@ -121,6 +131,7 @@ app.post('/webhook', async (req, res) => {
     res.sendStatus(500);
   }
 });
+
 
 // ✅ ROTA: Verificar status do pagamento
 app.get('/status-pagamento/:id', async (req, res) => {
