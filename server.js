@@ -68,45 +68,58 @@ app.post('/criar-pagamento', async (req, res) => {
 });
 
 // ✅ WEBHOOK para confirmar compra de moedas
-app.post('/webhook', async (req, res) => {
-  const data = req.body;
+app.post("/webhook", async (req, res) => {
+  console.log("Webhook recebido:", JSON.stringify(req.body));
 
-  try {
-    if (data.type === 'payment' && data.data?.id) {
-      const paymentId = data.data.id;
+  // Ajuste aqui conforme estrutura do webhook do Mercado Pago
+  // Geralmente os dados estão em req.body.data.object
+  const payment = req.body.data?.object;
 
-      const response = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
-        headers: { Authorization: `Bearer ${mpAccessToken}` }
-      });
+  if (!payment) {
+    console.log("Pagamento não encontrado no webhook");
+    return res.sendStatus(400);
+  }
 
-      const payment = await response.json();
+  // Verifica status de pagamento
+  if (payment.status === "approved" || payment.status === "paid") {
+    const paymentId = payment.id;
+    // Você deve garantir que uid e moedas estão no metadata do pagamento
+    const uid = payment.metadata?.uid;
+    const moedas = parseInt(payment.metadata?.moedas);
 
-      if (payment.status === 'approved') {
-        let info = {};
-        try {
-          info = JSON.parse(payment.external_reference);
-        } catch (e) {
-          console.warn('⚠️ Erro ao interpretar external_reference:', e);
-        }
-
-        await admin.db.collection('compras_moedas').add({
-          uid: info.uid,
-          moedas: info.moedas,
-          preco: info.preco,
-          status: payment.status,
-          payment_id: payment.id,
-          data_pagamento: new Date()
-        });
-
-        console.log(`✅ Compra confirmada - ${info.moedas} moedas para ${info.uid}`);
-      }
+    if (!uid || !moedas) {
+      console.log("UID ou moedas ausentes no metadata do pagamento");
+      return res.sendStatus(400);
     }
 
-    res.sendStatus(200);
-  } catch (error) {
-    console.error('❌ Erro no webhook:', error);
-    res.sendStatus(500);
+    try {
+      // Salvar compra
+      await db.collection("comprasMoedas").add({
+        uid,
+        moedas,
+        paymentId,
+        dataCompra: admin.firestore.FieldValue.serverTimestamp(),
+        status: "pago"
+      });
+
+      // Atualizar saldo do usuário com transação
+      const userRef = db.collection("usuarios").doc(uid);
+      await db.runTransaction(async (transaction) => {
+        const doc = await transaction.get(userRef);
+        const saldoAtual = doc.exists ? (doc.data().saldoMoedas || 0) : 0;
+        transaction.set(userRef, { saldoMoedas: saldoAtual + moedas }, { merge: true });
+      });
+
+      console.log(`Pagamento ${paymentId} confirmado para usuário ${uid}. Saldo atualizado.`);
+      return res.sendStatus(200);
+    } catch (error) {
+      console.error("Erro ao processar pagamento:", error);
+      return res.sendStatus(500);
+    }
   }
+
+  // Outros status ignorados
+  res.sendStatus(200);
 });
 // ✅ ROTA: Verificar status do pagamento
 app.get('/status-pagamento/:id', async (req, res) => {
