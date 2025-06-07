@@ -1,13 +1,13 @@
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
-const admin = require('./firebaseConfig'); // seu config do Firebase admin SDK
+const admin = require('./firebaseConfig');
 require('dotenv').config();
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-const fetch = require('node-fetch'); // import node-fetch para fetch funcionar no Node.js
+const fetch = global.fetch;
 const mpAccessToken = process.env.MERCADO_PAGO_ACCESS_TOKEN;
 
 app.use(cors());
@@ -17,22 +17,7 @@ app.get('/', (req, res) => {
   res.send('✅ Backend está rodando - Compra de Moedas via Pix');
 });
 
-// Função para buscar dados do pagamento no Mercado Pago via API
-async function getPaymentInfo(paymentId) {
-  const res = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
-    headers: {
-      Authorization: `Bearer ${mpAccessToken}`
-    }
-  });
-
-  if (!res.ok) {
-    throw new Error(`Erro ao buscar pagamento: ${res.statusText}`);
-  }
-
-  return await res.json();
-}
-
-// ROTA: Criar pagamento Pix para compra de moedas
+// ✅ ROTA: Criar pagamento Pix para compra de moedas
 app.post('/criar-pagamento', async (req, res) => {
   const { uid, moedas, preco } = req.body;
 
@@ -59,8 +44,7 @@ app.post('/criar-pagamento', async (req, res) => {
           first_name: 'Usuário',
           last_name: uid
         },
-        external_reference: JSON.stringify({ uid, moedas, preco }),
-        metadata: { uid, moedas }  // IMPORTANTE: enviar uid e moedas no metadata para facilitar no webhook
+        external_reference: JSON.stringify({ uid, moedas, preco })
       })
     });
 
@@ -83,55 +67,48 @@ app.post('/criar-pagamento', async (req, res) => {
   }
 });
 
-// WEBHOOK para confirmar compra de moedas
-app.post("/webhook", async (req, res) => {
-  console.log("Webhook recebido:", JSON.stringify(req.body));
+// ✅ WEBHOOK para confirmar compra de moedas
+app.post('/webhook', async (req, res) => {
+  const data = req.body;
 
   try {
-    const paymentId = req.body.data?.id;
-    if (!paymentId) {
-      console.log("ID do pagamento não encontrado no webhook");
-      return res.sendStatus(400);
-    }
+    if (data.type === 'payment' && data.data?.id) {
+      const paymentId = data.data.id;
 
-    const payment = await getPaymentInfo(paymentId);
-    console.log("Dados completos do pagamento:", payment);
+      const response = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
+        headers: { Authorization: `Bearer ${mpAccessToken}` }
+      });
 
-    if (payment.status === "approved" || payment.status === "paid") {
-      const uid = payment.metadata?.uid;
-      const moedas = parseInt(payment.metadata?.moedas);
+      const payment = await response.json();
 
-      if (!uid || !moedas) {
-        console.log("UID ou moedas ausentes no metadata do pagamento");
-        return res.sendStatus(400);
+      if (payment.status === 'approved') {
+        let info = {};
+        try {
+          info = JSON.parse(payment.external_reference);
+        } catch (e) {
+          console.warn('⚠️ Erro ao interpretar external_reference:', e);
+        }
+
+        await admin.db.collection('compras_moedas').add({
+          uid: info.uid,
+          moedas: info.moedas,
+          preco: info.preco,
+          status: payment.status,
+          payment_id: payment.id,
+          data_pagamento: new Date()
+        });
+
+        console.log(`✅ Compra confirmada - ${info.moedas} moedas para ${info.uid}`);
       }
-
-      await admin.firestore().collection("comprasMoedas").add({
-        uid,
-        moedas,
-        paymentId,
-        dataCompra: admin.firestore.FieldValue.serverTimestamp(),
-        status: "pago"
-      });
-
-      const userRef = admin.firestore().collection("usuarios").doc(uid);
-      await admin.firestore().runTransaction(async (transaction) => {
-        const doc = await transaction.get(userRef);
-        const saldoAtual = doc.exists ? (doc.data().saldoMoedas || 0) : 0;
-        transaction.set(userRef, { saldoMoedas: saldoAtual + moedas }, { merge: true });
-      });
-
-      console.log(`Pagamento ${paymentId} confirmado para usuário ${uid}. Saldo atualizado.`);
     }
 
-    return res.sendStatus(200);
+    res.sendStatus(200);
   } catch (error) {
-    console.error("Erro ao processar webhook:", error);
-    return res.sendStatus(500);
+    console.error('❌ Erro no webhook:', error);
+    res.sendStatus(500);
   }
 });
-
-// ROTA: Verificar status do pagamento
+// ✅ ROTA: Verificar status do pagamento
 app.get('/status-pagamento/:id', async (req, res) => {
   const paymentId = req.params.id;
 
