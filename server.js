@@ -108,6 +108,31 @@ app.post('/webhook', async (req, res) => {
     res.sendStatus(500);
   }
 });
+// ✅ ROTA: Verificar status do pagamento
+app.get('/status-pagamento/:id', async (req, res) => {
+  const paymentId = req.params.id;
+
+  if (!paymentId) {
+    return res.status(400).json({ erro: 'ID do pagamento é obrigatório.' });
+  }
+
+  try {
+    const response = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
+      headers: { Authorization: `Bearer ${mpAccessToken}` }
+    });
+
+    const data = await response.json();
+
+    if (!data || data.error) {
+      return res.status(404).json({ erro: 'Pagamento não encontrado.' });
+    }
+
+    res.json({ status: data.status });
+  } catch (error) {
+    console.error('❌ Erro ao verificar pagamento:', error);
+    res.status(500).json({ erro: 'Erro ao verificar pagamento.' });
+  }
+});
 
 app.listen(port, () => {
   console.log(`✅ Servidor rodando na porta ${port}`);
